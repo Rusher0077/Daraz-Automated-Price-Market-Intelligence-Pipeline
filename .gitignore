@@ -29,3 +29,6 @@ htmlcov/
 .vscode/
 !.vscode/extensions.json
 !.vscode/settings.json
+
+# Excel Workbooks
+data/*.xlsx
