@@ -32,3 +32,4 @@ htmlcov/
 
 # Excel Workbooks
 data/*.xlsx
+data/*.csv
