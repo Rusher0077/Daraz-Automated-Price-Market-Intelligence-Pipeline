@@ -75,3 +75,170 @@ print("null category leaf: ", df_test["category_leaf"].isna().sum())
 
 print(df_test[["source_sheet", "Category", "category_normalized", "category_leaf"]].sample(10, random_state=1))
 # %%
+# Step 2: price and discount cleaning
+# Price and Original_Price come in like "৳ 51,990", so I'll strip the currency
+# symbol and commas before converting to float.
+# Discount_Perc is a negative decimal (-0.28) so I'll flip it to a positive
+# percentage (28).
+# is_discounted is set BEFORE filling missing values, so I don't lose the
+# difference between "no discount" and "discount data wasn't filled in".
+# A literal 0% discount counts as not discounted too, same as a NaN.
+
+def clean_prices(df):
+    df = df.copy()
+
+    def to_number(series):
+        return (
+            series.astype(str)
+            .str.replace("৳", "", regex=False)
+            .str.replace(",", "", regex=False)
+            .str.strip()
+            .replace("nan", pd.NA)
+            .astype(float)
+        )
+
+    df["Price"] = to_number(df["Price"])
+    df["Original_Price"] = to_number(df["Original_Price"])
+
+    # flip sign, -0.28 becomes 0.28, then to a percentage scale, 28
+    df["Discount_Perc"] = df["Discount_Perc"].abs() * 100
+
+    # is_discounted: True only where a real, nonzero discount exists
+    df["is_discounted"] = df["Discount_Perc"].notna() & (df["Discount_Perc"] > 0)
+
+    # now fill the non-discounted rows
+    missing_or_zero = df["Original_Price"].isna() | df["Discount_Perc"].isna() | (df["Discount_Perc"] == 0)
+    df.loc[missing_or_zero, "Original_Price"] = df.loc[missing_or_zero, "Original_Price"].fillna(df.loc[missing_or_zero, "Price"])
+    df.loc[df["Original_Price"].isna(), "Original_Price"] = df.loc[df["Original_Price"].isna(), "Price"]
+    df["Discount_Perc"] = df["Discount_Perc"].fillna(0)
+
+    return df
+# %%
+# Test: clean_prices, chained off the category step's output
+
+df_priced = clean_prices(df_test)
+
+print(df_priced[["Price", "Original_Price", "Discount_Perc", "is_discounted"]].describe())
+print("is_discounted value counts:")
+print(df_priced["is_discounted"].value_counts())
+print("null Price after cleaning:", df_priced["Price"].isna().sum())
+print("null Original_Price after cleaning:", df_priced["Original_Price"].isna().sum())
+
+df_priced[["Price", "Original_Price", "Discount_Perc", "is_discounted"]].sample(10, random_state=1)
+
+# %%
+# Step 3: string-parsing cleanup
+# A few trust-signal fields come in with literal prefix/suffix text baked into
+# the string, found during real data inspection, not in the original plan.
+#   sold_by               "Sold byHaier"            -> "Haier"
+#   Positive Seller Ratings "Positive Seller Ratings90%" -> 90.0
+#   ship_on_time          "Ship on Time100%"        -> 100.0
+#   seller_rating         "4.9/5"                   -> 4.9
+#   rating                "270 Ratings"              -> 270  (this is review count)
+# Some sellers show "Not enough data" instead of a number, no history yet.
+# pd.to_numeric with errors="coerce" turns that into NaN instead of crashing.
+
+def clean_text_fields(df):
+    df = df.copy()
+
+    df["sold_by"] = (
+        df["sold_by"].astype(str)
+        .str.replace("Sold by", "", regex=False)
+        .str.strip()
+        .replace("nan", pd.NA)
+    )
+
+    df["Positive Seller Ratings"] = pd.to_numeric(
+        df["Positive Seller Ratings"].astype(str)
+        .str.replace("Positive Seller Ratings", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
+
+    df["ship_on_time"] = pd.to_numeric(
+        df["ship_on_time"].astype(str)
+        .str.replace("Ship on Time", "", regex=False)
+        .str.replace("%", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
+
+    df["seller_rating"] = pd.to_numeric(
+        df["seller_rating"].astype(str)
+        .str.replace("/5", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
+
+    df["rating"] = pd.to_numeric(
+        df["rating"].astype(str)
+        .str.replace("Ratings", "", regex=False)
+        .str.strip(),
+        errors="coerce",
+    )
+
+    return df
+
+
+
+# %%
+df_clean_text = clean_text_fields(df_priced)
+
+cols = ["sold_by", "Positive Seller Ratings", "ship_on_time", "seller_rating", "rating"]
+print(df_clean_text[cols].describe(include="all"))
+print()
+for c in cols:
+    print(c, "nulls:", df_clean_text[c].isna().sum())
+
+df_clean_text[cols].sample(10, random_state=1)
+
+
+# %%
+# Step 4a: drop known broken rows
+# These are scrape failures confirmed from memory during scraping itself,
+# not duplicates. No SKU, no Price, no Category, nothing to work with.
+# Dropped explicitly here rather than relying on dedup's NaN behavior to
+# remove them as a side effect.
+
+def drop_broken_rows(df):
+    df = df.copy()
+    before = len(df)
+
+    broken = df["SKU"].isna() & df["Price"].isna() & df["Category"].isna()
+    df = df[~broken]
+
+    print(f"drop_broken_rows: {before - len(df)} broken rows dropped, {len(df)} remain")
+    return df
+
+# %%
+# Step 4b: deduplicate by SKU
+# Dedup runs across the full combined dataset, not per sheet or per chunk,
+# since the same product could in theory show up more than once anywhere
+# in the scrape. I keep the first occurrence and log how many got dropped.
+
+def dedup_by_sku(df):
+    # Found 28 cross-listed products (same SKU, same listing, scraped from two
+    # different category pages, e.g. a laptop charger appearing under both
+    # Keyboard and Laptops). keep="first" picks whichever sheet got combined
+    # first, not necessarily the better-fit category. Leaving this as is,
+    # same acceptable-imprecision call as the AC/Fridge contamination scope.
+    df = df.copy()
+
+    before = len(df)
+    df = df.drop_duplicates(subset="SKU", keep="first")
+    after = len(df)
+
+    print(f"dedup_by_sku: {before - after} duplicate rows dropped, {after} remain")
+    return df
+
+
+# %%
+# Test: dedup_by_sku, chained off the text-cleaning step's output
+
+df_no_broken = drop_broken_rows(df_clean_text)
+df_deduped = dedup_by_sku(df_no_broken)
+
+print("final row count:", len(df_deduped))
+# %%
+
