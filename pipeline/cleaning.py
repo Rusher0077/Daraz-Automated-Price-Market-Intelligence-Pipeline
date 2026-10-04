@@ -240,5 +240,170 @@ df_no_broken = drop_broken_rows(df_clean_text)
 df_deduped = dedup_by_sku(df_no_broken)
 
 print("final row count:", len(df_deduped))
-# %%
 
+#%%
+# Step 5: drop columns not needed in the analysis dataset
+# These are kept in raw_staging (the untouched raw_combined feeds that), but
+# dropped here since they add no analytical value, per requirements.md
+# Section 7. Description is dropped from the analysis dataset only.
+
+COLUMNS_TO_DROP = [
+    "PAGE URL",
+    "Offer URL",
+    "URL",
+    "Seller",
+    "Brand · Url",
+    "Offers · Has Merchant Return Policy · Applicable Country",
+    "Offers · Has Merchant Return Policy · Return Policy Category",
+    "Type",
+    "Description",
+]
+
+def drop_unused_columns(df, columns = COLUMNS_TO_DROP):
+    df = df.copy()
+    existing = [c for c in columns if c in df.columns]
+    missing = [c for c in columns if c not in df.columns]
+
+    if missing:
+        print(f"drop_unsued_columns: These were already missing, skipped:{missing}")
+
+    return df.drop(columns=existing)
+
+
+# %%
+# Test: drop_unused_columns, chained off the dedup step's output
+
+df_final = drop_unused_columns(df_deduped)
+
+print("Columns before: ", df_deduped.shape[1]) 
+print("Columns after: ", df_final.shape[1])
+print(df_final.columns.tolist())
+# %%
+# Step 6: TF-IDF category mismatch flagging
+# Vectorize Name + Description across the whole dataset so every sheet shares
+# one vocabulary space, build a centroid per source_sheet from its own rows,
+# then score every row by cosine similarity to its own sheet's centroid.
+# Low score means the product's text doesn't look like the rest of its sheet,
+# a likely contamination or cross-domain accessory.
+#
+# A single global threshold doesn't work, confirmed in the notebook:
+#   - TV and Laptops separate cleanly at their own higher thresholds (0.20, 0.18)
+#   - Software and Books sit on a naturally lower baseline (unrelated legit
+#     titles share little vocabulary), so they get lower thresholds (0.08)
+#   - AC's contamination overlaps real AC vocabulary (car AC parts), so no
+#     score cutoff separates it, handled instead with a manual override list
+#     of row_ids confirmed as contamination by direct product inspection
+#   - everything else uses the 0.15 default
+#
+# Note: this function is meant to run on raw_staging data per chunk, not on
+# already-cleaned clean_products, per requirements.md Section 8. Description
+# was already dropped from df_final earlier in this pipeline, so this
+# function needs to be called on data that still has it, before
+# drop_unused_columns, or Description needs to be carried separately into
+# raw_staging for this step specifically.
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+DEFAULT_THRESHOLD = 0.15
+
+SHEET_THRESHOLDS = {
+    "TV": 0.20,
+    "Laptops": 0.18,
+    "Softwares": 0.08,
+    "Books": 0.08,
+}
+
+KNOWN_CONTAMINATION_IDS = {
+    "AC": [3021, 3010, 2879, 3006, 2994, 3033, 3038, 3078, 3076, 3071, 3058, 2877,
+           3049, 3041, 2931, 2925, 2924, 2916, 2908, 2903, 2978, 2975, 2961, 2952, 2972],
+}
+
+
+def flag_category_mismatch(df, default_threshold=DEFAULT_THRESHOLD,
+                            sheet_thresholds=SHEET_THRESHOLDS,
+                            known_contamination_ids=KNOWN_CONTAMINATION_IDS):
+    df = df.copy()
+
+    text = (df["Name"].fillna("") + " " + df["Description"].fillna(""))
+
+    vectorizer = TfidfVectorizer(stop_words="english")
+    tfidf_matrix = vectorizer.fit_transform(text)
+
+    scores = pd.Series(index=df.index, dtype=float)
+
+    for sheet in df["source_sheet"].unique():
+        sheet_mask = df["source_sheet"] == sheet
+        sheet_vectors = tfidf_matrix[sheet_mask.values]
+
+        centroid = sheet_vectors.mean(axis=0)
+        centroid = pd.Series(centroid.tolist()[0])  # convert matrix row to array-like
+
+        sims = cosine_similarity(sheet_vectors, [centroid.values])
+        scores.loc[sheet_mask] = sims.ravel()
+
+    df["category_match_score"] = scores
+
+    # score-based flag, per-sheet threshold where set, default otherwise
+    threshold_per_row = df["source_sheet"].map(sheet_thresholds).fillna(default_threshold)
+    score_flag = df["category_match_score"] < threshold_per_row
+
+    # manual override, on top of the score flag, not instead of it
+    override_flag = pd.Series(False, index=df.index)
+    for sheet, ids in known_contamination_ids.items():
+        override_flag |= df["row_id"].isin(ids) & (df["source_sheet"] == sheet)
+
+    df["is_contamination_flagged"] = score_flag | override_flag
+
+    return df
+
+
+# %%
+# Test: flag_category_mismatch, chained off the dedup step's output, 
+# then drop_unused_columns, chained off the flagging step's output
+
+df_flagged = flag_category_mismatch(df_deduped)
+df_final = drop_unused_columns(df_flagged)
+
+print("Columns before:", df_flagged.shape[1])
+print("Columns after:", df_final.shape[1])
+print(df_final.columns.tolist())
+print()
+print("total flagged:", df_final["is_contamination_flagged"].sum())
+print("flag rate:", round(df_final["is_contamination_flagged"].mean() * 100, 1), "%")
+
+
+# %%
+print(df_final.groupby("source_sheet")["is_contamination_flagged"].mean().sort_values(ascending=False) * 100)
+# %%
+# Step 7: the pipeline entry point
+# Chains every cleaning step in the correct order. This is what actually runs
+# per chunk once chunking/staging is wired up, not just a test harness like
+# the cells above it.
+# Order matters: flag_category_mismatch needs Description, so it has to run
+# before drop_unused_columns, which removes it.
+
+def clean_batch(df):
+    df = assign_categories(df)
+    df = clean_prices(df)
+    df = clean_text_fields(df)
+    df = drop_broken_rows(df)
+    df = dedup_by_sku(df)
+    df = flag_category_mismatch(df)
+    df = drop_unused_columns(df)
+    return df
+# %%
+# Test: clean_batch end to end, starting from the raw load, not from any
+# intermediate df_ variable, to confirm the whole chain works standalone
+
+df_raw_test = load_raw()
+df_pipeline_result = clean_batch(df_raw_test)
+
+print("input rows:", len(df_raw_test))
+print("output rows:", len(df_pipeline_result))
+print("output columns:", df_pipeline_result.shape[1])
+print(df_pipeline_result.columns.tolist())
+print()
+print("total flagged:", df_pipeline_result["is_contamination_flagged"].sum())
+print("flag rate:", round(df_pipeline_result["is_contamination_flagged"].mean() * 100, 1), "%")
+# %%
