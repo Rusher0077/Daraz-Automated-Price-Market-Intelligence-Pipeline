@@ -319,37 +319,64 @@ KNOWN_CONTAMINATION_IDS = {
            3049, 3041, 2931, 2925, 2924, 2916, 2908, 2903, 2978, 2975, 2961, 2952, 2972],
 }
 
+# %%
+# Step 6a: fit the TF-IDF reference once, on the full raw dataset
+# This must run exactly once, before any chunk processing, on data that
+# still has every row and the Description column. The vectorizer's
+# vocabulary and each sheet's centroid are fixed after this point, every
+# chunk gets scored against these same reference points, never refit.
 
-def flag_category_mismatch(df, default_threshold=DEFAULT_THRESHOLD,
-                            sheet_thresholds=SHEET_THRESHOLDS,
-                            known_contamination_ids=KNOWN_CONTAMINATION_IDS):
-    df = df.copy()
-
+def fit_contamination_reference(df):
     text = (df["Name"].fillna("") + " " + df["Description"].fillna(""))
 
     vectorizer = TfidfVectorizer(stop_words="english")
     tfidf_matrix = vectorizer.fit_transform(text)
 
-    scores = pd.Series(index=df.index, dtype=float)
+    centroids = {}
+    for sheet in df["source_sheet"].unique():
+        sheet_mask = (df["source_sheet"] == sheet).values
+        sheet_vectors = tfidf_matrix[sheet_mask]
+        centroid = sheet_vectors.mean(axis = 0)
+        centroids[sheet] = pd.Series(centroid.tolist()[0]).values
+
+    return vectorizer, centroids
+
+
+# %%
+# Step 6b: score a chunk against the pre-fit reference
+# Uses transform(), not fit_transform(), so every chunk is scored against
+# the same vocabulary and centroids the thresholds were actually calibrated
+# against, instead of rebuilding a smaller, chunk-specific vocabulary.
+
+def flag_category_mismatch(df, vectorizer, centroids,
+                           default_threshold = DEFAULT_THRESHOLD,
+                           sheet_thresholds = SHEET_THRESHOLDS,
+                           known_contamination_ids = KNOWN_CONTAMINATION_IDS
+                           ):
+    df = df.copy()
+
+    text = (df["Name"].fillna("") + " " + df["Description"].fillna(""))
+    tfidf_matrix = vectorizer.transform(text)  # transform only, vocabulary is fixed
+
+    scores = pd.Series(index = df.index, dtype = float)
 
     for sheet in df["source_sheet"].unique():
-        sheet_mask = df["source_sheet"] == sheet
-        sheet_vectors = tfidf_matrix[sheet_mask.values]
+        if sheet not in centroids:
+            # a sheet with no reference centroid, shouldn't happen if the
+            # reference was fit on the full dataset, but guard anyway
+            continue
 
-        centroid = sheet_vectors.mean(axis=0)
-        centroid = pd.Series(centroid.tolist()[0])  # convert matrix row to array-like
-
-        sims = cosine_similarity(sheet_vectors, [centroid.values])
-        scores.loc[sheet_mask] = sims.ravel()
+        sheet_mask = (df["source_sheet"] == sheet).values
+        sheet_vectors = tfidf_matrix[sheet_mask]
+        sims = cosine_similarity(sheet_vectors, [centroids[sheet]])
+        scores.loc[df.index[sheet_mask]] = sims.ravel()
 
     df["category_match_score"] = scores
 
-    # score-based flag, per-sheet threshold where set, default otherwise
     threshold_per_row = df["source_sheet"].map(sheet_thresholds).fillna(default_threshold)
     score_flag = df["category_match_score"] < threshold_per_row
 
-    # manual override, on top of the score flag, not instead of it
-    override_flag = pd.Series(False, index=df.index)
+    override_flag = pd.Series(False, index= df.index)
     for sheet, ids in known_contamination_ids.items():
         override_flag |= df["row_id"].isin(ids) & (df["source_sheet"] == sheet)
 
@@ -358,23 +385,8 @@ def flag_category_mismatch(df, default_threshold=DEFAULT_THRESHOLD,
     return df
 
 
-# %%
-# Test: flag_category_mismatch, chained off the dedup step's output, 
-# then drop_unused_columns, chained off the flagging step's output
-
-df_flagged = flag_category_mismatch(df_deduped)
-df_final = drop_unused_columns(df_flagged)
-
-print("Columns before:", df_flagged.shape[1])
-print("Columns after:", df_final.shape[1])
-print(df_final.columns.tolist())
-print()
-print("total flagged:", df_final["is_contamination_flagged"].sum())
-print("flag rate:", round(df_final["is_contamination_flagged"].mean() * 100, 1), "%")
 
 
-# %%
-print(df_final.groupby("source_sheet")["is_contamination_flagged"].mean().sort_values(ascending=False) * 100)
 # %%
 # Step 7: the pipeline entry point
 # Chains every cleaning step in the correct order. This is what actually runs
@@ -383,27 +395,13 @@ print(df_final.groupby("source_sheet")["is_contamination_flagged"].mean().sort_v
 # Order matters: flag_category_mismatch needs Description, so it has to run
 # before drop_unused_columns, which removes it.
 
-def clean_batch(df):
+def clean_batch(df, vectorizer, centroids):
     df = assign_categories(df)
     df = clean_prices(df)
     df = clean_text_fields(df)
     df = drop_broken_rows(df)
     df = dedup_by_sku(df)
-    df = flag_category_mismatch(df)
+    df = flag_category_mismatch(df, vectorizer, centroids)
     df = drop_unused_columns(df)
     return df
-# %%
-# Test: clean_batch end to end, starting from the raw load, not from any
-# intermediate df_ variable, to confirm the whole chain works standalone
-
-df_raw_test = load_raw()
-df_pipeline_result = clean_batch(df_raw_test)
-
-print("input rows:", len(df_raw_test))
-print("output rows:", len(df_pipeline_result))
-print("output columns:", df_pipeline_result.shape[1])
-print(df_pipeline_result.columns.tolist())
-print()
-print("total flagged:", df_pipeline_result["is_contamination_flagged"].sum())
-print("flag rate:", round(df_pipeline_result["is_contamination_flagged"].mean() * 100, 1), "%")
 # %%
