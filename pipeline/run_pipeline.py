@@ -87,6 +87,17 @@ print()
 print("HDD rows per chunk:")
 print(df_chunked[df_chunked["source_sheet"] == "HDD"]["scrape_batch_id"].value_counts().sort_index())
 
+# %%
+# Fit the contamination reference ONCE, on the full raw dataset, before
+# any chunk processing begins. Every batch_id run reuses this same
+# vectorizer and these same centroids.
+
+from cleaning import fit_contamination_reference
+
+df_raw_full = load_raw() # full dataset, needed to build a representative reference
+vectorizer, centroids = fit_contamination_reference(df_raw_full)
+
+print("Reference fit on", len(df_raw_full), "rows,", len(centroids), "sheet centroid")
 
 # %%
 # Step 2: process one chunk end to end
@@ -152,6 +163,18 @@ def process_chunk(df_chunked, batch_id, engine):
 
     chunk = df_chunked[df_chunked["scrape_batch_id"] == batch_id].copy()
     rows_in = len(chunk)
+    # cross-chunk dedup: filter out SKUs already written to clean_products by
+    # an earlier batch. Catches the 28 known cross-listed products that could
+    # otherwise land in two different chunks.
+
+    with engine.connect() as conn:
+        existing_skus = pd.read_sql(text("SELECT sku FROM clean_products"), conn)["sku"].tolist()
+
+    before_cross_dedup = len(chunk)
+    chunk = chunk[~chunk["SKU"].isin(existing_skus)] # SKU, capital, matches raw_combined's column name
+    cross_chunk_dropped = before_cross_dedup - len(chunk)
+    if cross_chunk_dropped > 0:
+        print(f"batch {batch_id}: {cross_chunk_dropped} rows dropped, SKU already in clean_products from an earlier batch")
 
     try:
         # write the raw chunk to raw_staging, untouched
@@ -160,7 +183,7 @@ def process_chunk(df_chunked, batch_id, engine):
         raw_to_write[raw_cols].to_sql("raw_staging", engine, if_exists = "append", index=False)
 
         # run the chunk through the cleaning pipeline
-        cleaned = clean_batch(chunk)
+        cleaned = clean_batch(chunk, vectorizer, centroids)
         rows_cleaned = len(cleaned)
         rows_flagged = int(cleaned["is_contamination_flagged"].sum())
         rows_dropped = rows_in - rows_cleaned
