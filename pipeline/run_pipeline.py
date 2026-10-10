@@ -225,7 +225,7 @@ def process_chunk(df_chunked, batch_id, engine):
 
 
 # %%
-# Test: run chunk 1 only, as your first real manual trigger
+# Test: run chunks
 
-result = process_chunk(df_chunked, batch_id=1, engine=engine)
+result = process_chunk(df_chunked, batch_id=7, engine=engine)
 # %%
