@@ -329,7 +329,7 @@ KNOWN_CONTAMINATION_IDS = {
 def fit_contamination_reference(df):
     text = (df["Name"].fillna("") + " " + df["Description"].fillna(""))
 
-    vectorizer = TfidfVectorizer(stop_words="english")
+    vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
     tfidf_matrix = vectorizer.fit_transform(text)
 
     centroids = {}
