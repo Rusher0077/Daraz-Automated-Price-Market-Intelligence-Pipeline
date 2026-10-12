@@ -30,6 +30,7 @@ htmlcov/
 !.vscode/extensions.json
 !.vscode/settings.json
 
-# Excel Workbooks
-data/*.xlsx
-data/*.csv
+# Excel Workbooks and csvs
+data/raw/*.xlsx
+data/processed/*.csv
+!data/processed/raw_combined.csv
