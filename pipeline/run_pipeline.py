@@ -36,7 +36,7 @@ print("Connected. Tables found:", tables)
 import pandas as pd
 import numpy as np
 
-from cleaning import load_raw, clean_batch
+from cleaning_core import load_raw, clean_batch
 
 N_CHUNKS = 7
 
@@ -48,7 +48,7 @@ N_CHUNKS = 7
 # clean_batch(), so this stays genuinely raw data, no price/text cleaning,
 # no TF-IDF, that all still happens per chunk after loading.
 
-from cleaning import CATEGORY_MAP
+from cleaning_core import CATEGORY_MAP
 
 def chunk_raw_data(df, n_chunks = N_CHUNKS, random_state = 42):
     df= df.copy()
@@ -92,7 +92,7 @@ print(df_chunked[df_chunked["source_sheet"] == "HDD"]["scrape_batch_id"].value_c
 # any chunk processing begins. Every batch_id run reuses this same
 # vectorizer and these same centroids.
 
-from cleaning import fit_contamination_reference
+from cleaning_core import fit_contamination_reference
 
 df_raw_full = load_raw() # full dataset, needed to build a representative reference
 vectorizer, centroids = fit_contamination_reference(df_raw_full)
