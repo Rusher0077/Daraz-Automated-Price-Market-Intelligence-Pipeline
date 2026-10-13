@@ -2,7 +2,9 @@ name:  Run pipeline batch
 
 on:
     schedule: 
-        - cron: "0 3,9,15 * * *"
+        - cron: "17 3,9,15,21 * * *"
+          timezone: "Asia/Dhaka"
+
     workflow_dispatch:
         inputs:
             load_all:
