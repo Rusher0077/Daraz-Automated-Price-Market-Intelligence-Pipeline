@@ -1,0 +1,41 @@
+name:  Run pipeline batch
+
+on:
+    schedule: 
+        - cron: "0 3,9,15 * * *"
+    workflow_dispatch:
+        inputs:
+            load_all:
+                description: "Load every pending batch"
+                type: boolean
+                default: false
+
+concurrency:
+    group: pipeline
+    cancel-in-progress: false
+
+jobs:
+    run-batch:
+        runs-on: ubuntu-latest
+        timeout-minutes: 10
+        steps: 
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-python@v5
+              with:
+                python-version: "3.12"
+                cache: pip
+
+            - run: pip install -r requirements.txt
+
+            - name: Run batch
+              env:
+                NEON_CONNECTION_STRING: ${{secrets.NEON_CONNECTION_STRING}}
+              run: |
+                if [ "${{ inputs.load_all }}" = "true" ]; then
+                    python pipeline/run_batch.py --all
+                else
+                    python pipeline/run_batch.py
+                fi
+
+                 
