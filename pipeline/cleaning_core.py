@@ -182,7 +182,7 @@ def drop_unused_columns(df, columns=COLUMNS_TO_DROP):
 def fit_contamination_reference(df):
     # run once on the full raw data (with Description), never refit per chunk
     text = df["Name"].fillna("") + " " + df["Description"].fillna("")
-    vectorizer = TfidfVectorizer(stop_words="english", max_features=5000)
+    vectorizer = TfidfVectorizer(stop_words="english")
     tfidf_matrix = vectorizer.fit_transform(text)
 
     centroids = {}
