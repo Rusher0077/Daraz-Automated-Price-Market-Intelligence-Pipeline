@@ -6,7 +6,7 @@ An end-to-end data pipeline built on **8,287** real product listings scraped fro
 
 On top of the pipeline sits a market intelligence analysis of pricing, discounting, ratings and brand positioning across 15 product categories.
 
-**Stack:** Python (pandas, scikit-learn, SQLAlchemy) · PostgreSQL (Neon) · GitHub Actions · Power BI · PandaExtract
+**Stack:** Python (pandas, scikit-learn, SQLAlchemy) · PostgreSQL (Neon) · GitHub Actions · Power BI · Ultimate Web Scraper
 
 **Live dashboard:** [View the published Power BI report](https://app.powerbi.com/view?r=eyJrIjoiNjE3NTBhNGYtZjg0ZS00ZGQyLWIxZTUtOGM2ZTVlODY5OWRjIiwidCI6IjlhMjdkMTllLTQ0MjEtNDRmYi1hY2Q4LWZkNTZjOWZiYTJkOCIsImMiOjEwfQ%3D%3D&pageName=8ab4b6239fe095483ff2)
 
@@ -30,7 +30,7 @@ Flagged rows are kept in `clean_products` with a boolean flag rather than delete
 
 ## Dataset
 
-Product listings from [Daraz Bangladesh](https://www.daraz.com.bd), scraped with the PandaExtract browser extension. Four workbooks, 16 sheets:
+Product listings from [Daraz Bangladesh](https://www.daraz.com.bd), scraped with the Ultimate Web Scraper browser extension. Four workbooks, 16 sheets:
 
 | Workbook | Sheets |
 |---|---|
@@ -39,7 +39,7 @@ Product listings from [Daraz Bangladesh](https://www.daraz.com.bd), scraped with
 | Fashion | Sunglass, Cloth, Shirt, Shoes, Handbag |
 | Books | Books |
 
-Each row carries 24 raw columns: name, description, brand, category breadcrumb, SKU, price, original price, discount, seller stats, and rating fields. The HDD sheet was stopped at 200 rows on purpose, because past that point the category page started surfacing unrelated products.
+Each row carries 24 raw columns: name, description, brand, category breadcrumb, SKU, price, original price, discount, seller stats, and rating fields. 
 
 This is a one-time scrape, not a live feed. The "daily" arrival is simulated by chunking the data (see Pipeline Execution).
 
@@ -59,7 +59,7 @@ raw_combined.csv  (row_id added, source_sheet and workbook tagged)
 Neon PostgreSQL
   raw_staging   (append-only, exactly as received)
         |
-        | PYTHON PIPELINE (pipeline/)
+        | PYTHON PIPELINE (pipeline/cleaning_core)
         |   parse prices and discounts, clean text fields
         |   drop broken rows, dedup by SKU (across batches)
         |   assign categories, flag contamination (TF-IDF)
@@ -135,7 +135,7 @@ One global threshold did not work, because sheets behave differently:
 | Vocabulary-overlapping contamination | AC (and probably Fridge) | Car AC accessories reuse words like "air conditioner" and "cooling", so scores overlap with real products. Known AC contamination scored between 0.07 and 0.38, nearly the full range | Manual override list of 25 reviewed `row_id` values on top of the score |
 | Naturally low baseline similarity | Software, Books | Legitimate titles differ a lot from each other, so scores sit low without any contamination | Lower threshold (0.08) |
 
-Everything else uses a default threshold of 0.15. These values were calibrated by reading histograms and sampling products by hand, which is a deliberate scope choice for a portfolio project.
+Everything else uses a default threshold of 0.15. These values were calibrated by reading histograms and sampling products by hand, which was a deliberate scope choice for this portfolio project.
 
 The check also separates contamination from legitimate accessories. A cover made specifically for air conditioners is kept. A universal remote that lists AC as one of five supported devices is treated as contamination.
 
@@ -164,11 +164,15 @@ For each batch the pipeline:
 
 ### GitHub Actions
 
-![GitHub Actions run history](media/screenshots/github_actions_runs.png)
+![GitHub Actions run history](media/screenshots/action_trigger.png)
 
 The workflow runs **four times a day** (03:17, 09:17, 15:17 and 21:17, Asia/Dhaka time) and can also be started manually. It has a `load_all` option that loads every pending batch in one go. A concurrency group prevents two runs from overlapping, and the database connection string is stored as a GitHub secret.
 
-The run history shows 8 runs. Run #1 was a test to confirm the trigger worked: all batches were already loaded from earlier manual runs, so it correctly loaded nothing. Runs #2 to #8 loaded the 7 batches, with #2 triggered manually and #3 to #8 running on the schedule. Each run finished in under 3 minutes, most in about 40 seconds.
+The run history shows 8 runs. Run **#1** was a test to confirm the trigger worked: all batches were already loaded from earlier manual runs, so it correctly loaded nothing. Runs **#2** to **#8** loaded the 7 batches, with **#2** triggered manually and **#3** to **#8** running on the schedule. 
+
+Each run finished in under 3 minutes, most in about 40 seconds.
+
+*[Note: GitHub Actions scheduled runs can start late when GitHub is under heavy load, so the run times in the Actions tab may not match the cron schedule exactly. This is not a limitation of the pipeline]*
 
 ---
 
@@ -180,7 +184,7 @@ The full analysis is in [`notebooks/eda.ipynb`](notebooks/eda.ipynb), grouped by
 
 - Medians instead of means for prices, because price distributions here are heavily skewed
 - Key statistics checked with and without flagged rows before deciding what to exclude
-- Headline price charts use main products only, with flagged rows and accessories excluded, and the definition is stated on the chart
+- Headline price charts use main products only, with flagged rows and accessories excluded
 - A rating counts as real only when reviews are at least 1 and stars are above 0
 - Discount depth is averaged among discounted products only
 - Every rating-based number shows its sample size next to it, with a minimum rated count per category
@@ -193,13 +197,13 @@ The full analysis is in [`notebooks/eda.ipynb`](notebooks/eda.ipynb), grouped by
 
 Two pages, connected to Neon in Import mode (manual refresh). [Open the published report](https://app.powerbi.com/view?r=eyJrIjoiNjE3NTBhNGYtZjg0ZS00ZGQyLWIxZTUtOGM2ZTVlODY5OWRjIiwidCI6IjlhMjdkMTllLTQ0MjEtNDRmYi1hY2Q4LWZkNTZjOWZiYTJkOCIsImMiOjEwfQ%3D%3D&pageName=8ab4b6239fe095483ff2) or open [`dashboard/Dashboard.pbix`](dashboard/Dashboard.pbix) locally.
 
-**Page 1: Pipeline health.** Ingestion volume, cleaning pass rate and contamination rate per batch, cumulative rows loaded, and flag rate by category.
+**Page 1: Pipeline health:** Ingestion volume, cleaning pass rate and contamination rate per batch, cumulative rows loaded, and flag rate by category.
 
-![Pipeline health page](media/screenshots/pbi_pipeline_health.png)
+![Pipeline health page](media/screenshots/page_1.png)
 
-**Page 2: Market intelligence.** The findings from the EDA notebook.
+**Page 2: Market intelligence:** The findings from the EDA notebook.
 
-![Market intelligence page](media/screenshots/pbi_market_intelligence.png)
+![Market intelligence page](media/screenshots/page_2.png)
 
 ---
 
@@ -208,7 +212,7 @@ Two pages, connected to Neon in Import mode (manual refresh). [Open the publishe
 - **`source_sheet` is the category source of truth.** Daraz's category field is wrong often enough that no mapping could repair it, so the page a product was scraped from decides its category.
 - **The TF-IDF vectorizer is fitted once, not per batch.** An early version refitted it on every chunk, which quietly changed the IDF weights and made the calibrated thresholds meaningless. Batch 1 flagged a different share than the full dataset because of it. The fix was to fit the vectorizer and sheet centroids once on the full raw data and only call `transform` per batch. After the fix, batch 1 flagged 19.4% against 20.0% overall.
 - **Deduplication looks across batches.** Dedup inside a single chunk cannot catch a product whose two copies land in different batches, so each incoming chunk is filtered against SKUs already in `clean_products`.
-- **Flagging is not deleting.** Flagged rows stay in `clean_products` with `is_contamination_flagged`. What to exclude is decided in the analysis, not hidden inside the pipeline.
+- **Flagging is not deleting.** Flagged rows stay in `clean_products` with `is_contamination_flagged`. What to exclude is decided in the analysis without hidden inside the pipeline.
 - **Raw data is never cleaned before chunking.** If contamination were removed up front, every pipeline run would find none, and the `rows_flagged_contamination` metric would mean nothing.
 - **A tested simplification was rolled back.** Adding `max_features=5000` to the vectorizer dropped the flagged count from 1,650 to 1,363, because the thresholds assume the full vocabulary. The vectorizer stays without it.
 
@@ -221,8 +225,8 @@ Two pages, connected to Neon in Import mode (manual refresh). [Open the publishe
 - 28 products were listed under two category pages. The pipeline keeps the copy from whichever sheet was combined first, which is not always the better-fitting category.
 - Some `ship_on_time` values are actually "Chat Response Rate", scraped into the same column position by the extension. 60 of the 161 nulls in that column come from this.
 - Only about 12% of products have ratings, so rating-based findings rest on a smaller subset than price findings.
-- The data is a single scrape. There is no real time dimension, so this project cannot show price changes over time.
-- Power BI refresh is manual. Scheduled refresh would need Power BI Pro and a gateway.
+- The data is cross-sectional  scrape. There is no real time dimension, so this project cannot show price changes over time.
+- Power BI refresh is manual. Scheduled refresh would need Power BI Pro and a gateway, which can be a future scope for this project.
 
 ---
 
@@ -236,7 +240,7 @@ Daraz-Automated-Price-Market-Intelligence-Pipeline/
 ├── dashboard/
 │   └── Dashboard.pbix           # Power BI dashboard (2 pages)
 ├── data/
-│   ├── raw/                     # original scraped workbooks (not tracked in git)
+│   ├── raw/                     # original scraped workbooks (not tracked in git except raw_combined.csv)
 │   │   ├── Books.xlsx
 │   │   ├── Electronics.xlsx
 │   │   ├── Fashion.xlsx
@@ -254,7 +258,7 @@ Daraz-Automated-Price-Market-Intelligence-Pipeline/
 │   ├── cleaning_core.py         # reusable cleaning functions
 │   ├── cleaning.py              # scratchpad where the cleaning functions were first built and tested
 │   ├── run_batch.py             # loads one batch into raw_staging
-│   └── run_pipeline.py          # runs the full pipeline on a batch
+│   └── run_pipeline.py          # scratchpad where the pipeline functions were first built and tested 
 ├── sql/
 │   └── schema.sql               # table definitions for Neon
 ├── .gitattributes
@@ -285,4 +289,5 @@ Credentials and the raw data are not included in this repository. To run it your
 
 - **Email**: pallabdey21@gmail.com
 - **LinkedIn**: [linkedin.com/in/pallabdey007](https://www.linkedin.com/in/pallabdey007)
+- **Portfolio**: [pallabdey.com](https://www.pallabdey.com/)
 - **GitHub**: [github.com/Rusher0077](https://github.com/Rusher0077)
