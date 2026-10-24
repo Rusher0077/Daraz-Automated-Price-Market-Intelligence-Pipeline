@@ -224,7 +224,7 @@ Two pages, connected to Neon in Import mode (manual refresh). [Open the publishe
 - Fridge shows the same overlapping-vocabulary pattern as AC but was not fully investigated and has no override list.
 - 28 products were listed under two category pages. The pipeline keeps the copy from whichever sheet was combined first, which is not always the better-fitting category.
 - Some `ship_on_time` values are actually "Chat Response Rate", scraped into the same column position by the extension. 60 of the 161 nulls in that column come from this.
-- Only about 12% of products have ratings, so rating-based findings rest on a smaller subset than price findings.
+- Only about 8.3% of the core products have ratings, so rating-based findings rest on a smaller subset than price findings.
 - The data is cross-sectional  scrape. There is no real time dimension, so this project cannot show price changes over time.
 - Power BI refresh is manual. Scheduled refresh would need Power BI Pro and a gateway, which can be a future scope for this project.
 
